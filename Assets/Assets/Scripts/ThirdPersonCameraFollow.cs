@@ -27,7 +27,7 @@ public sealed class ThirdPersonCameraFollow : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (target == null)
+        if (target == null || Time.deltaTime <= 0f)
         {
             return;
         }

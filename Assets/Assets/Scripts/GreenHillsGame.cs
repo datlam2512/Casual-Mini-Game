@@ -1,6 +1,8 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using static TrailInterface;
 
 public sealed class GreenHillsGame : MonoBehaviour
 {
@@ -11,33 +13,72 @@ public sealed class GreenHillsGame : MonoBehaviour
 
     public int Score { get; private set; }
     public int Lives { get; private set; } = 3;
-    public bool IsPlaying => !recovering && !completed && Lives > 0;
+    public bool IsPlaying => !paused && !recovering && !completed && !loading && Lives > 0;
+    private readonly HashSet<Transform> activatedCheckpoints = new();
     private bool completed;
-    private bool checkpointActive;
-    private string notice;
-    private bool IsSecondLevel => SceneManager.GetActiveScene().name == "Level02";
-    private float noticeUntil;
-
     private bool recovering;
-    private bool restarting;
+    private bool loading;
+    private bool paused;
+    private bool playerWasEnabled;
+    private float previousTimeScale;
     private string lossMessage;
-    private GUIStyle heading, body, button;
+    private float noticeUntil;
+    private int level;
+    private string levelLabel;
+    private string scoreLabel = "Coins  00";
+    private string lifeLabel = "Lives  3";
+    private string resultLabel;
+    private Color accent;
+    private GUIStyle heading, body, small;
+
+    private void Awake()
+    {
+        level = TrailCatalog.Number(gameObject.scene.name);
+        levelLabel = $"{level:00}   {TrailCatalog.Name(level)}";
+        accent = TrailCatalog.Accent(level);
+    }
 
     private void Update()
     {
-        if (IsPlaying && player.transform.position.y < fallHeight)
+        if (Input.GetKeyDown(KeyCode.Escape))
         {
-            LoseLife("You fell off the trail");
+            if (paused) Resume();
+            else if (CanPause) Pause();
         }
+        if (IsPlaying && player.transform.position.y < fallHeight) LoseLife("You fell off the trail");
     }
+
+    private bool CanPause => !paused && !loading && !completed && Lives > 0;
+
+    private void Pause()
+    {
+        paused = true;
+        previousTimeScale = Time.timeScale;
+        playerWasEnabled = player.enabled;
+        player.enabled = false;
+        Time.timeScale = 0;
+    }
+
+    private void Resume()
+    {
+        RestoreClock();
+        player.enabled = playerWasEnabled;
+    }
+
+    private void RestoreClock()
+    {
+        if (!paused) return;
+        paused = false;
+        Time.timeScale = previousTimeScale;
+    }
+
+    private void OnDisable() => RestoreClock();
 
     public void ActivateCheckpoint(Transform marker)
     {
-        if (!IsPlaying || checkpointActive) return;
+        if (!IsPlaying || marker == null || !activatedCheckpoints.Add(marker)) return;
         spawn = marker;
-        checkpointActive = true;
-        notice = "Checkpoint saved";
-        noticeUntil = Time.unscaledTime + 3f;
+        noticeUntil = Time.time + 2f;
     }
 
     public void CompleteLevel()
@@ -45,12 +86,14 @@ public sealed class GreenHillsGame : MonoBehaviour
         if (!IsPlaying) return;
         completed = true;
         player.enabled = false;
+        resultLabel = $"{Score} coins collected";
     }
 
     public bool TryCollect()
     {
         if (!IsPlaying) return false;
         Score++;
+        scoreLabel = $"Coins  {Score:00}";
         return true;
     }
 
@@ -59,6 +102,8 @@ public sealed class GreenHillsGame : MonoBehaviour
         if (!IsPlaying) return;
         lossMessage = message;
         Lives--;
+        lifeLabel = $"Lives  {Lives}";
+        resultLabel = $"{Score} coins collected";
         recovering = true;
         player.enabled = false;
         if (Lives > 0) StartCoroutine(Respawn());
@@ -66,7 +111,7 @@ public sealed class GreenHillsGame : MonoBehaviour
 
     private IEnumerator Respawn()
     {
-        yield return new WaitForSecondsRealtime(1.25f);
+        yield return new WaitForSeconds(1.25f);
         var controller = player.GetComponent<CharacterController>();
         controller.enabled = false;
         player.transform.SetPositionAndRotation(spawn.position, spawn.rotation);
@@ -81,90 +126,90 @@ public sealed class GreenHillsGame : MonoBehaviour
     {
         if (heading == null)
         {
-            heading = new GUIStyle(GUI.skin.label) { fontSize = 32, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
-            heading.normal.textColor = new Color(.15f, .29f, .20f);
-            body = new GUIStyle(heading) { fontSize = 20, fontStyle = FontStyle.Normal };
-            button = new GUIStyle(GUI.skin.button) { fontSize = 22, fontStyle = FontStyle.Bold };
-            button.normal.textColor = new Color(.18f, .29f, .12f);
-            button.hover.textColor = button.normal.textColor;
-            button.active.textColor = button.normal.textColor;
-            var gold = new Texture2D(1, 1);
-            gold.SetPixel(0, 0, new Color(1f, .77f, .32f));
-            gold.Apply();
-            button.normal.background = gold;
-            button.hover.background = gold;
-            button.active.background = gold;
+            heading = Style(32);
+            body = Style(20);
+            small = Style(16);
         }
 
-        var previousMatrix = GUI.matrix;
-        float scale = Mathf.Min(Screen.width / 960f, Screen.height / 540f);
-        GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(scale, scale, 1f));
-        float width = Screen.width / scale;
-        float height = Screen.height / scale;
-        var hud = new Rect(width * .5f - 154f, 16f, 308f, 46f);
-        DrawPanel(hud, new Color(1f, .96f, .82f, .97f));
-        GUI.Label(hud, $"COINS  {Score:00}     LIVES  {Lives} / 3", body);
-        DrawPanel(new Rect(18, 18, 228, 40), new Color(1f, .96f, .82f, .94f));
-        GUI.Label(new Rect(18, 18, 228, 40), IsSecondLevel ? "SUNSET HOLLOW  /  02" : "GREEN HILLS  /  01", body);
-        if (Time.unscaledTime < noticeUntil)
-            GUI.Label(new Rect(width / 2 - 200, 72, 400, 40), notice, body);
-        if (completed)
-        {
-            DrawPanel(new Rect(0, 0, width, height), new Color(.04f,.12f,.12f,.7f));
-            var panel = new Rect(width / 2 - 220, height / 2 - 120, 440, 240);
-            DrawPanel(panel, new Color(1f,.96f,.84f,.99f));
-            GUI.Label(new Rect(panel.x, panel.y + 20, 440, 48), "Adventure complete!", heading);
-            GUI.Label(new Rect(panel.x, panel.y + 76, 440, 40), $"You collected {Score} coins", body);
-            bool available = !IsSecondLevel && Application.CanStreamedLevelBeLoaded("Level02");
-            GUI.enabled = available;
-            if (GUI.Button(new Rect(panel.x + 90, panel.y + 130, 260, 50), IsSecondLevel ? "Adventure completed" : "Continue to Map 2", button))
-                SceneManager.LoadScene("Level02");
-            GUI.enabled = true;
-            if (GUI.Button(new Rect(panel.x + 120, panel.y + 190, 200, 36), "Level selection", button)) SceneManager.LoadScene("MainMenu");
-            GUI.matrix = previousMatrix;
-            return;
-        }
+        Matrix4x4 previous = GUI.matrix;
+        Vector2 viewport = Begin();
+        DrawHud(viewport);
 
-        if (IsPlaying && GUI.Button(new Rect(width - 105, 18, 88, 40), "Menu", button)) SceneManager.LoadScene("MainMenu");
-        if (!IsPlaying)
-        {
-            DrawPanel(new Rect(0, 0, width, height), new Color(.05f, .13f, .10f, .62f));
-            var card = new Rect(width * .5f - 205f, height * .5f - 104f, 410f, 208f);
-            DrawPanel(card, new Color(1f, .96f, .84f, .99f));
-            GUI.Label(new Rect(card.x, card.y + 19, card.width, 45), Lives == 0 ? "Game Over" : lossMessage, heading);
-            GUI.Label(new Rect(card.x, card.y + 67, card.width, 40),
-                Lives == 0 ? $"Coins collected: {Score}" : $"Lives left: {Lives}", body);
-            if (Lives == 0)
-            {
-                if (GUI.Button(new Rect(card.center.x - 85, card.y + 123, 170, 49), "Restart", button))
-                {
-                    Restart();
-                }
-            }
-            else
-            {
-                GUI.Label(new Rect(card.x, card.y + 124, card.width, 42), checkpointActive ? "Returning to your checkpoint…" : "Returning to the start…", body);
-            }
-        }
-        GUI.matrix = previousMatrix;
+        if (paused)
+            DrawPause(viewport);
+        else if (completed || Lives == 0)
+            DrawResult(viewport);
+        else if (recovering)
+            Toast(viewport, lossMessage);
+        else if (Time.time < noticeUntil)
+            Toast(viewport, "Checkpoint saved");
+
+        GUI.matrix = previous;
     }
 
-    private void Restart()
+    private void DrawHud(Vector2 viewport)
     {
-        if (Lives != 0 || restarting) return;
-        restarting = true;
-        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+        var plate = new Rect(16, 12, 250, 54);
+        SignFace(plate, levelLabel, body);
+        Panel(new Rect(43, 51, 25, 3), accent, 1.5f);
+
+        float right = viewport.x - 16;
+        var stats = new Rect(right - 325, 17, 205, 44);
+        DrawPaper(stats);
+        Panel(new Rect(stats.x + 103, stats.y + 12, 2, 20), new Color(.63f, .45f, .26f), 1);
+        Label(new Rect(stats.x + 5, stats.y, 98, stats.height), scoreLabel, small, Ink);
+        Label(new Rect(stats.x + 106, stats.y, 92, stats.height), lifeLabel, small, Ink);
+
+        var menu = new Rect(right - 112, 11, 112, 56);
+        if (CanPause)
+        {
+            if (Sign(menu, "Menu", small)) Pause();
+        }
+        else SignFace(menu, "Menu", small);
     }
 
-    private static void DrawPanel(Rect rect, Color color)
+    private void Toast(Vector2 viewport, string caption)
     {
-        var previous = GUI.color;
-        GUI.color = color;
-        GUI.DrawTexture(new Rect(rect.x + 3, rect.y + 5, rect.width, rect.height), Texture2D.whiteTexture, ScaleMode.StretchToFill, true, 0, new Color(0,0,0,.22f), 0, 16);
-        GUI.color = Color.white;
-        GUI.DrawTexture(rect, Texture2D.whiteTexture, ScaleMode.StretchToFill, true, 0, color, 0, 16);
-        GUI.DrawTexture(new Rect(rect.x + 14, rect.y + 1, rect.width - 28, 3), Texture2D.whiteTexture,
-            ScaleMode.StretchToFill, true, 0, new Color(1f, .78f, .35f, .9f), 0, 2);
-        GUI.color = previous;
+        var rect = new Rect(viewport.x * .5f - 115, 78, 230, 43);
+        DrawPaper(rect);
+        Label(rect, caption, small, Ink);
+    }
+
+    private void DrawPause(Vector2 viewport)
+    {
+        Panel(new Rect(Vector2.zero, viewport), Scrim, 0);
+        Vector2 origin = viewport * .5f - new Vector2(215, 137);
+        DrawPaper(At(origin, 0, 0, 430, 274));
+        SignFace(At(origin, 84, 18, 262, 65), "Paused", heading, primary: true);
+        Label(At(origin, 18, 88, 394, 35), levelLabel, small, Ink);
+        if (Sign(At(origin, 85, 128, 260, 67), "Resume", body, primary: true)) Resume();
+        if (Sign(At(origin, 114, 199, 202, 52), "Main menu", small, left: true)) Load("MainMenu");
+    }
+
+    private void DrawResult(Vector2 viewport)
+    {
+        Panel(new Rect(Vector2.zero, viewport), Scrim, 0);
+        Vector2 origin = viewport * .5f - new Vector2(215, 108);
+        DrawPaper(At(origin, 0, 0, 430, 216));
+        Label(At(origin, 14, 21, 402, 51),
+            Lives == 0 ? "Out of lives" : level == TrailCatalog.Count ? "Adventure complete" : "Trail cleared",
+            heading, Ink);
+        Label(At(origin, 15, 75, 400, 32), resultLabel, body, Ink);
+
+        var primary = At(origin, 24, 130, 192, 63);
+        if (Lives == 0 && Sign(primary, "Retry", body, primary: true)) Load(gameObject.scene.name);
+        if (completed && level < TrailCatalog.Count && Sign(primary, "Next trail", body, primary: true))
+            Load(TrailCatalog.Scene(level + 1));
+        float menuX = completed && level == TrailCatalog.Count ? 123 : 228;
+        if (Sign(At(origin, menuX, 130, 178, 63), "Main menu", small, left: true)) Load("MainMenu");
+    }
+
+    private void Load(string scene)
+    {
+        if (loading || !Application.CanStreamedLevelBeLoaded(scene)) return;
+        loading = true;
+        RestoreClock();
+        player.enabled = false;
+        SceneManager.LoadSceneAsync(scene);
     }
 }
